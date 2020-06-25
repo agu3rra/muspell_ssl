@@ -5,9 +5,8 @@ import os
 from .tls_definitions import (
     Contents,
     Protocols,
-    CiphersTLSv12,
+    ProtocolCiphers,
     Handshakes,
-    SignatureAlgorithms
 )
 
 TIMEOUT = 3  # socket connection timeout in seconds
@@ -36,15 +35,36 @@ class Scanner():
             [dict], err: An array representing the tested TLS Handshakes
         """
         # Trial run
-        hello_bytes = self._build_client_hello()
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(TIMEOUT)
-        address = (self.hostname, self.port)
+        results = []
         try:
-            sock.connect(address)
-            sock.send(hello_bytes)
-            response = sock.recv(BUFFER)
-            response = response.hex()
+            # Try a number of secret handshakes
+            for protocol in Protocols:
+                result = {}
+                result["protocol"] = protocol.name
+                ciphers = ProtocolCiphers[protocol.name]
+                result["ciphers_tested"] = len(ciphers)
+                ciphers_supported = []
+                for cipher in ciphers:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(TIMEOUT)
+                    address = (self.hostname, self.port)
+                    sock.connect(address)
+                    hello_bytes = self._build_client_hello(
+                        self.hostname,
+                        protocol.value,
+                        cipher.value)
+                    sock.send(hello_bytes)
+                    response = sock.recv(BUFFER)
+                    response = response.hex()
+                    sock.close()
+
+                    # Evaluate response
+                    if len(response) > 2:
+                        if response[:2] == Contents.HANDSHAKE.value:
+                            ciphers_supported.append(cipher.name)
+                result["ciphers_supported"] = ciphers_supported
+                print("Test finished for protocol: {}".format(protocol.name))
+                results.append(result)
 
         except socket.timeout:
             return None, Errors.SocketTimeout.value
@@ -52,14 +72,24 @@ class Scanner():
         except Exception as e:
             unknown_error = str(e)
             print(unknown_error)
-            return None, unknown_error
-
-        finally:
             sock.close()
+            return None, unknown_error
 
         return [], None
 
-    def _build_client_hello(self):
+    def _build_client_hello(self, host, protocol, cipher_suite):
+        """Builds a TLS Client Hello byte sequence for the given arguments.
+
+        Args:
+            host (str): a DNS record or IP address.
+            protocol (str): 4 hex chars (2 bytes) representing the TLS 
+                            Protocol to test according to RFC.
+            cipher_suite (str): 4 hex chars (2 bytes) representing the cipher
+                                suite to test.
+        Returns:
+            byte string: a hex representation of the hello message which can
+                         be sent over a network to a remote host.
+        """
 
         def get_length(message, bytes_size):
             """
@@ -79,17 +109,8 @@ class Scanner():
 
             return get_hex(get_bytesize(message), bytes_size)
 
-        # Extension signature
-        sig_algs = SignatureAlgorithms.SHA384_DSA.value
-        ext_sig_algs = sig_algs
-        sig_hash_length = get_length(ext_sig_algs, 2)
-        ext_sig_algs = sig_hash_length + ext_sig_algs
-        sig_length = get_length(ext_sig_algs, 2)
-        ext_type = "000d"  # extension type signature algorithms
-        ext_sig_algs = ext_type + sig_length + ext_sig_algs
-
         # Extension server name
-        hostname = "google.com".encode("utf-8").hex()  # for the above, google.com has 10 chars/bytes
+        hostname = host.encode("utf-8").hex()  # for the above, google.com has 10 chars/bytes
         hostname_length = get_length(hostname, 2)
         server_name_type = "00"  # 00 is hostname
         ext_server_name = server_name_type + hostname_length + hostname
@@ -100,7 +121,7 @@ class Scanner():
         ext_server_name = ext_type + server_name_length + ext_server_name
 
         # Extensions combined
-        extensions = ext_server_name + ext_sig_algs
+        extensions = ext_server_name
         extensions_length = get_length(extensions, 2)
         message = extensions_length + extensions
 
@@ -110,8 +131,7 @@ class Scanner():
         message = compr_length + compression_method + message
 
         # Cipher suites
-        #ciphers = CiphersTLSv12.TLS_RSA_WITH_AES_256_GCM_SHA384.value
-        ciphers = CiphersTLSv12.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384.value
+        ciphers = cipher_suite
         ciphers_length = get_length(ciphers, 2)
         message = ciphers_length + ciphers + message
 
@@ -123,7 +143,7 @@ class Scanner():
         rnd = os.urandom(32).hex()
 
         # Handshake
-        handshake_version = Protocols.TLSv12.value
+        handshake_version = protocol
         message = handshake_version + rnd + message
         handshake_length = get_length(message, 3)  # 3 bytes
         handshake_type = Handshakes.CLIENT_HELLO.value
@@ -131,7 +151,7 @@ class Scanner():
 
         # Final adjustment
         total_size = get_length(message, 2)  # calculate; 2 bytes
-        hello_version = Protocols.TLSv10.value  # not sure it works for all cases; perhaps it needs to be SSLv30 for it and TLSv10 for other cases; compatibility issues
+        hello_version = protocol
         content_type = Contents.HANDSHAKE.value
 
         message = content_type + hello_version + total_size + message
