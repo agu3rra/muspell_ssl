@@ -1,6 +1,7 @@
 import socket
 import enum
 import os
+import logging
 
 from .tls_definitions import (
     Contents,
@@ -9,8 +10,16 @@ from .tls_definitions import (
     Handshakes,
 )
 
-TIMEOUT = 3  # socket connection timeout in seconds
+# CONSTANTS
+TIMEOUT = 5  # socket connection timeout in seconds
 BUFFER = 4096
+
+# Logging Setup
+logging.basicConfig(
+    filename="scanner.log",
+    level=logging.INFO,
+    format='%(asctime)-15s - %(levelname)s - %(message)s'
+)
 
 
 class Errors(enum.Enum):
@@ -38,7 +47,12 @@ class Scanner():
         results = []
         try:
             # Try a number of secret handshakes
+            logging.info("Muspell SSL")
+            logging.info("Starting scan for {}:{}".format(self.hostname,
+                                                          self.port))
+            logging.info("---")
             for protocol in Protocols:
+                logging.info("***\nProtocol: {}".format(protocol.name))
                 result = {}
                 result["protocol"] = protocol.name
                 ciphers = ProtocolCiphers[protocol.name]
@@ -47,31 +61,50 @@ class Scanner():
                 for cipher in ciphers:
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     sock.settimeout(TIMEOUT)
+                    # sock.setblocking(False)
                     address = (self.hostname, self.port)
-                    sock.connect(address)
                     hello_bytes = self._build_client_hello(
                         self.hostname,
                         protocol.value,
                         cipher.value)
+                    logging.info("Testing cipher: {}".format(cipher.name))
+                    logging.info("Client Hello:")
+                    logging.info(hello_bytes.hex())
+                    sock.connect(address)
                     sock.send(hello_bytes)
                     response = sock.recv(BUFFER)
                     response = response.hex()
+                    sock.shutdown(socket.SHUT_RDWR)
                     sock.close()
 
                     # Evaluate response
+                    logging.info("Response from remote server:")
+                    logging.info(response)
                     if len(response) > 2:
                         if response[:2] == Contents.HANDSHAKE.value:
+                            logging.info("{} supported: YES.".format(
+                                cipher.name))
                             ciphers_supported.append(cipher.name)
+                        else:
+                            logging.info("{} supported: NO.".format(
+                                cipher.name))
+                    logging.info("#################")
                 result["ciphers_supported"] = ciphers_supported
                 print("Test finished for protocol: {}".format(protocol.name))
                 results.append(result)
+            logging.info("Results:\n{}".format(results))
+            logging.info("Scan finished.")
 
         except socket.timeout:
+            logging.info(Errors.SocketTimeout.value)
+            sock.shutdown(socket.SHUT_RDWR)
+            sock.close()
             return None, Errors.SocketTimeout.value
 
         except Exception as e:
             unknown_error = str(e)
-            print(unknown_error)
+            logging.info(unknown_error)
+            sock.shutdown(socket.SHUT_RDWR)
             sock.close()
             return None, unknown_error
 
@@ -82,7 +115,7 @@ class Scanner():
 
         Args:
             host (str): a DNS record or IP address.
-            protocol (str): 4 hex chars (2 bytes) representing the TLS 
+            protocol (str): 4 hex chars (2 bytes) representing the TLS
                             Protocol to test according to RFC.
             cipher_suite (str): 4 hex chars (2 bytes) representing the cipher
                                 suite to test.
@@ -110,7 +143,7 @@ class Scanner():
             return get_hex(get_bytesize(message), bytes_size)
 
         # Extension server name
-        hostname = host.encode("utf-8").hex()  # for the above, google.com has 10 chars/bytes
+        hostname = host.encode("utf-8").hex()
         hostname_length = get_length(hostname, 2)
         server_name_type = "00"  # 00 is hostname
         ext_server_name = server_name_type + hostname_length + hostname
