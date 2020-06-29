@@ -5,9 +5,11 @@ import logging
 
 from .tls_definitions import (
     Contents,
+    Handshakes,
     Protocols,
     ProtocolCiphers,
-    Handshakes,
+    EcPointFormats,
+    SupportedGroups,
 )
 
 # CONSTANTS
@@ -142,6 +144,28 @@ class Scanner():
 
             return get_hex(get_bytesize(message), bytes_size)
 
+        # Placeholder for message
+        message = ""
+
+        # Extension Supported Groups
+        supported_groups = ""
+        for group in SupportedGroups:
+            supported_groups += group.value
+        groups_list_len = get_length(supported_groups, 2)
+        groups = groups_list_len + supported_groups
+        groups_len = get_length(groups, 2)
+        ext_type = "000a"  # supported group type
+        ext_supported_groups = ext_type + groups_len + groups
+
+        # Extension EC Point Formats
+        ec_points = ""
+        for point in EcPointFormats:
+            ec_points += point.value
+        points_len = get_length(ec_points, 1)
+        ext_len = get_length(points_len + ec_points, 2)
+        ext_type = "000b"  # ec point formats type
+        ext_ec_point_formats = ext_type + ext_len + points_len + ec_points
+
         # Extension server name
         hostname = host.encode("utf-8").hex()
         hostname_length = get_length(hostname, 2)
@@ -154,7 +178,9 @@ class Scanner():
         ext_server_name = ext_type + server_name_length + ext_server_name
 
         # Extensions combined
-        extensions = ext_server_name
+        extensions = ext_server_name + \
+            ext_ec_point_formats + \
+            ext_supported_groups
         extensions_length = get_length(extensions, 2)
         message = extensions_length + extensions
 
