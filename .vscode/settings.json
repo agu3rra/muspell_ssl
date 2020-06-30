@@ -1,5 +1,4 @@
 {
-    "python.pythonPath": "/home/m4rbl3/.local/share/virtualenvs/muspell-ssl-N9OPKp6h/bin/python3",
     "python.linting.pylintEnabled": false,
     "python.linting.flake8Enabled": true,
     "python.linting.enabled": true,

@@ -24,3 +24,24 @@ class Utilities():
                 ip_address = socket_addr[0]
 
         return ip_address
+
+    @staticmethod
+    def get_length(message, bytes_size):
+        """
+        Generates the length (in bytes) of the given message padding the
+        result with the amount of bytes provided as input.
+
+        Returns:
+            str
+
+        Example: get_length('a011',3) returns '000002'
+        """
+        def get_hex(value, byte_size):
+            padding = byte_size * 2 + 2
+            zero_x = f"{value:#0{padding}x}"
+            return zero_x[2:]
+
+        def get_bytesize(hexstring):
+            return int(len(hexstring) / 2)
+
+        return get_hex(get_bytesize(message), bytes_size)

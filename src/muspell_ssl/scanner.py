@@ -2,6 +2,7 @@ import socket
 import enum
 import os
 import logging
+import json
 
 from .tls_definitions import (
     Contents,
@@ -10,7 +11,9 @@ from .tls_definitions import (
     ProtocolCiphers,
     EcPointFormats,
     SupportedGroups,
+    TLS_EMPTY_RENEGOTIATION_INFO_SCSV,
 )
+from .utilities import Utilities
 
 # CONSTANTS
 TIMEOUT = 5  # socket connection timeout in seconds
@@ -49,6 +52,7 @@ class Scanner():
         results = []
         try:
             # Try a number of secret handshakes
+            logging.info("####################################")
             logging.info("Muspell SSL")
             logging.info("Starting scan for {}:{}".format(self.hostname,
                                                           self.port))
@@ -67,7 +71,7 @@ class Scanner():
                     address = (self.hostname, self.port)
                     hello_bytes = self._build_client_hello(
                         self.hostname,
-                        protocol.value,
+                        protocol,
                         cipher.value)
                     logging.info("Testing cipher: {}".format(cipher.name))
                     logging.info("Client Hello:")
@@ -82,8 +86,14 @@ class Scanner():
                     # Evaluate response
                     logging.info("Response from remote server:")
                     logging.info(response)
-                    if len(response) > 2:
-                        if response[:2] == Contents.HANDSHAKE.value:
+                    if len(response) > 12:
+                        content_type = response[:2]
+                        version = response[2:6]
+                        hand_type = response[10:12]
+                        if (content_type == Contents.HANDSHAKE.value and
+                                version == protocol.value and
+                                hand_type == Handshakes.SERVER_HELLO.value):
+
                             logging.info("{} supported: YES.".format(
                                 cipher.name))
                             ciphers_supported.append(cipher.name)
@@ -94,7 +104,7 @@ class Scanner():
                 result["ciphers_supported"] = ciphers_supported
                 print("Test finished for protocol: {}".format(protocol.name))
                 results.append(result)
-            logging.info("Results:\n{}".format(results))
+            logging.info("Results:\n{}".format(json.dumps(results, indent=4)))
             logging.info("Scan finished.")
 
         except socket.timeout:
@@ -117,8 +127,8 @@ class Scanner():
 
         Args:
             host (str): a DNS record or IP address.
-            protocol (str): 4 hex chars (2 bytes) representing the TLS
-                            Protocol to test according to RFC.
+            protocol (enum): The enum representing the protocol and its hex
+                            value.
             cipher_suite (str): 4 hex chars (2 bytes) representing the cipher
                                 suite to test.
         Returns:
@@ -126,72 +136,59 @@ class Scanner():
                          be sent over a network to a remote host.
         """
 
-        def get_length(message, bytes_size):
-            """
-            Generates the length (in bytes) of the given message padding the
-            result with the amount of bytes provided as input.
+        if protocol.value == Protocols.SSLv20.value:
+            return self._client_hello_sslv20(cipher_suite)
 
-            Returns:
-                str
-            """
-            def get_hex(value, byte_size):
-                padding = byte_size * 2 + 2
-                zero_x = f"{value:#0{padding}x}"
-                return zero_x[2:]
+        # Placeholder for final byte sequence message
+        message = ''
+        if protocol.name.count("TLS") == 1:
+            # Extensions are supported as of TLSv1.0 onwards
 
-            def get_bytesize(hexstring):
-                return int(len(hexstring) / 2)
+            # Extension Supported Groups
+            supported_groups = ""
+            for group in SupportedGroups:
+                supported_groups += group.value
+            groups_list_len = Utilities.get_length(supported_groups, 2)
+            groups = groups_list_len + supported_groups
+            groups_len = Utilities.get_length(groups, 2)
+            ext_type = "000a"  # supported group type
+            ext_supported_groups = ext_type + groups_len + groups
 
-            return get_hex(get_bytesize(message), bytes_size)
+            # Extension EC Point Formats
+            ec_points = ""
+            for point in EcPointFormats:
+                ec_points += point.value
+            points_len = Utilities.get_length(ec_points, 1)
+            ext_len = Utilities.get_length(points_len + ec_points, 2)
+            ext_type = "000b"  # ec point formats type
+            ext_ec_point_formats = ext_type + ext_len + points_len + ec_points
 
-        # Placeholder for message
-        message = ""
+            # Extension server name
+            hostname = host.encode("utf-8").hex()
+            hostname_length = Utilities.get_length(hostname, 2)
+            server_name_type = "00"  # 00 is hostname
+            ext_server_name = server_name_type + hostname_length + hostname
+            server_name_list_length = Utilities.get_length(ext_server_name, 2)
+            ext_server_name = server_name_list_length + ext_server_name
+            server_name_length = Utilities.get_length(ext_server_name, 2)
+            ext_type = "0000"  # type 0x0000 is servername
+            ext_server_name = ext_type + server_name_length + ext_server_name
 
-        # Extension Supported Groups
-        supported_groups = ""
-        for group in SupportedGroups:
-            supported_groups += group.value
-        groups_list_len = get_length(supported_groups, 2)
-        groups = groups_list_len + supported_groups
-        groups_len = get_length(groups, 2)
-        ext_type = "000a"  # supported group type
-        ext_supported_groups = ext_type + groups_len + groups
-
-        # Extension EC Point Formats
-        ec_points = ""
-        for point in EcPointFormats:
-            ec_points += point.value
-        points_len = get_length(ec_points, 1)
-        ext_len = get_length(points_len + ec_points, 2)
-        ext_type = "000b"  # ec point formats type
-        ext_ec_point_formats = ext_type + ext_len + points_len + ec_points
-
-        # Extension server name
-        hostname = host.encode("utf-8").hex()
-        hostname_length = get_length(hostname, 2)
-        server_name_type = "00"  # 00 is hostname
-        ext_server_name = server_name_type + hostname_length + hostname
-        server_name_list_length = get_length(ext_server_name, 2)
-        ext_server_name = server_name_list_length + ext_server_name
-        server_name_length = get_length(ext_server_name, 2)
-        ext_type = "0000"  # type 0x0000 is servername
-        ext_server_name = ext_type + server_name_length + ext_server_name
-
-        # Extensions combined
-        extensions = ext_server_name + \
-            ext_ec_point_formats + \
-            ext_supported_groups
-        extensions_length = get_length(extensions, 2)
-        message = extensions_length + extensions
+            # Extensions combined
+            extensions = ext_server_name + \
+                ext_ec_point_formats + \
+                ext_supported_groups
+            extensions_length = Utilities.get_length(extensions, 2)
+            message = extensions_length + extensions
 
         # Compression
-        compression_method = "00"  # 1 byte; 00 is Null (no compression)
-        compr_length = get_length(compression_method, 1)
+        compression_method = "00"  # 0x0100 (DEFLATE + NULL)
+        compr_length = Utilities.get_length(compression_method, 1)
         message = compr_length + compression_method + message
 
         # Cipher suites
-        ciphers = cipher_suite
-        ciphers_length = get_length(ciphers, 2)
+        ciphers = cipher_suite + TLS_EMPTY_RENEGOTIATION_INFO_SCSV
+        ciphers_length = Utilities.get_length(ciphers, 2)
         message = ciphers_length + ciphers + message
 
         # Session
@@ -202,16 +199,46 @@ class Scanner():
         rnd = os.urandom(32).hex()
 
         # Handshake
-        handshake_version = protocol
+        handshake_version = protocol.value
         message = handshake_version + rnd + message
-        handshake_length = get_length(message, 3)  # 3 bytes
+        handshake_length = Utilities.get_length(message, 3)  # 3 bytes
         handshake_type = Handshakes.CLIENT_HELLO.value
         message = handshake_type + handshake_length + message
 
         # Final adjustment
-        total_size = get_length(message, 2)  # calculate; 2 bytes
-        hello_version = protocol
+        total_size = Utilities.get_length(message, 2)  # calculate; 2 bytes
+        hello_version = protocol.value
         content_type = Contents.HANDSHAKE.value
 
         message = content_type + hello_version + total_size + message
+        return bytes.fromhex(message)
+
+    def _client_hello_sslv20(self, cipher_suite):
+        """The Hello on SSLv2.0 looks different enough that I wanted to add it
+        separately.
+        """
+        challenge = os.urandom(16).hex()
+        challenge_length = Utilities.get_length(challenge, 2)
+
+        ciphers = cipher_suite
+        ciphers_length = Utilities.get_length(ciphers, 2)
+
+        session_length = "0000"  # not using session
+
+        version = Protocols.SSLv20.value
+
+        handshake_type = Handshakes.CLIENT_HELLO.value
+
+        message = handshake_type + \
+            version + \
+            ciphers_length + \
+            session_length + \
+            challenge_length + \
+            ciphers + \
+            challenge
+
+        total_length = Utilities.get_length(message, 1)
+        message = '80' + total_length + message  # Observed all SSLv20
+        # messages start with 0x80.
+
         return bytes.fromhex(message)

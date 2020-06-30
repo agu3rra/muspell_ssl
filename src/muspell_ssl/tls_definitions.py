@@ -281,6 +281,7 @@ class CiphersTLSv13(enum.Enum):
 class SupportedGroups(enum.Enum):
     secp256r1 = '0017'
     secp384r1 = '0018'
+    secp521r1 = '0019'
     x25519 = '001d'
     x448 = '001e'
 
@@ -289,6 +290,11 @@ class EcPointFormats(enum.Enum):
     uncompressed = '00'
     ansiX962_compressed_prime = '01'
     ansiX962_compressed_char2 = '02'
+
+
+# For increased compatibility, include this "cipher" on all requests from
+# SSLv3.0 onwards. Details on RFC 5746 section 3.3.
+TLS_EMPTY_RENEGOTIATION_INFO_SCSV = '00ff'
 
 
 ProtocolCiphers = {
