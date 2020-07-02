@@ -18,7 +18,7 @@ from .tls_definitions import (
 from .utilities import Utilities
 
 # CONSTANTS
-TIMEOUT = 5  # socket connection timeout in seconds
+TIMEOUT = 3  # socket connection timeout in seconds
 BUFFER = 4096
 
 # Logging Setup
@@ -98,7 +98,7 @@ class Scanner():
                         shutdown_required = False
 
                 if shutdown_required:
-                    sock.shutdown(socket.SHUT_RDWR)
+                    # sock.shutdown(socket.SHUT_RDWR)
                     sock.close()
 
                 # Evaluate response
