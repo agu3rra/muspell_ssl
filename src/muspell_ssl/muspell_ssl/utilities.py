@@ -1,6 +1,9 @@
 import socket
+import enum
 
-from .errors import UnableToResolveDNS
+
+class Errors(enum.Enum):
+    UnableToResolveDNS = "Unable to resolve IP for the given host."
 
 
 class Utilities():
@@ -14,8 +17,7 @@ class Utilities():
                 socket.AF_UNSPEC,
                 socket.IPPROTO_IP)
         except (socket.gaierror, IndexError, ConnectionError):
-            raise UnableToResolveDNS("Unable to resolve IP for: {}".format(
-                hostname))
+            raise ValueError(Errors.UnableToResolveDNS.value)
 
         family, _, _, _, socket_addr = address_data[0]
         ip_address = socket_addr[0]  # Use first entry by default

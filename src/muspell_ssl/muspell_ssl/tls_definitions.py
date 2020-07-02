@@ -292,6 +292,29 @@ class EcPointFormats(enum.Enum):
     ansiX962_compressed_char2 = '02'
 
 
+class SignatureAlgorithms(enum.Enum):
+    ECDSA_SECP256R1_SHA256 = '0403'
+    ECDSA_SECP384R1_SHA384 = '0503'
+    ECDSA_SECP521R1_SHA512 = '0603'
+    ED25519 = '0807'
+    ED448 = '0808'
+    RSA_PSS_PSS_SHA256 = '0809'
+    RSA_PSS_PSS_SHA384 = '080A'
+    RSA_PSS_PSS_SHA512 = '080B'
+    RSA_PSS_RSAE_SHA256 = '0804'
+    RSA_PSS_RSAE_SHA384 = '0805'
+    RSA_PSS_RSAE_SHA512 = '0806'
+    RSA_PKCS1_SHA256 = '0401'
+    RSA_PKCS1_SHA384 = '0501'
+    RSA_PKCS1_SHA512 = '0601'
+    SHA224_ECDSA = '0303'
+    SHA224_RSA = '0301'
+    SHA224_DSA = '0302'
+    SHA256_DSA = '0402'
+    SHA384_DSA = '0502'
+    SHA512_DSA = '0602'
+
+
 # For increased compatibility, include this "cipher" on all requests from
 # SSLv3.0 onwards. Details on RFC 5746 section 3.3.
 TLS_EMPTY_RENEGOTIATION_INFO_SCSV = '00ff'

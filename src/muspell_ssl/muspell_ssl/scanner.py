@@ -3,6 +3,7 @@ import enum
 import os
 import logging
 import json
+import errno
 
 from .tls_definitions import (
     Contents,
@@ -12,6 +13,7 @@ from .tls_definitions import (
     EcPointFormats,
     SupportedGroups,
     TLS_EMPTY_RENEGOTIATION_INFO_SCSV,
+    SignatureAlgorithms,
 )
 from .utilities import Utilities
 
@@ -29,9 +31,9 @@ logging.basicConfig(
 
 class Errors(enum.Enum):
     InvalidInit = "The scanner class has not been correctly initialized"
-    SocketTimeout = "Unable to reach remote server. Please check network "\
-        "connectivity or if the service is actually being served at the "\
-        "host:port given."
+    SocketTimeout = "Timeout when trying to reach remote server. Please "\
+        "check network connectivity or if the service is actually being "\
+        "served at the host:port given."
 
 
 class Scanner():
@@ -50,77 +52,81 @@ class Scanner():
         """
         # Trial run
         results = []
-        try:
-            # Try a number of secret handshakes
-            logging.info("####################################")
-            logging.info("Muspell SSL")
-            logging.info("Starting scan for {}:{}".format(self.hostname,
-                                                          self.port))
-            logging.info("---")
-            for protocol in Protocols:
-                logging.info("***\nProtocol: {}".format(protocol.name))
-                result = {}
-                result["protocol"] = protocol.name
-                ciphers = ProtocolCiphers[protocol.name]
-                result["ciphers_tested"] = len(ciphers)
-                ciphers_supported = []
-                for cipher in ciphers:
+        # Try a number of secret handshakes
+        logging.info("####################################")
+        logging.info("Muspell SSL")
+        logging.info("Starting scan for {}:{}".format(self.hostname,
+                                                      self.port))
+        logging.info("---")
+        for protocol in Protocols:
+            logging.info("***\nProtocol: {}".format(protocol.name))
+            result = {}
+            result["protocol"] = protocol.name
+            ciphers = ProtocolCiphers[protocol.name]
+            result["ciphers_tested"] = len(ciphers)
+            ciphers_supported = []
+            errors = []
+            for cipher in ciphers:
+                address = (self.hostname, self.port)
+                hello_bytes = self._build_client_hello(
+                    self.hostname,
+                    protocol,
+                    cipher.value)
+                logging.info("Testing cipher: {}".format(cipher.name))
+                logging.info("Client Hello:")
+                logging.info(hello_bytes.hex())
+
+                shutdown_required = True
+                response = ""  # ensure response exists if there is exception
+                try:
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     sock.settimeout(TIMEOUT)
                     # sock.setblocking(False)
-                    address = (self.hostname, self.port)
-                    hello_bytes = self._build_client_hello(
-                        self.hostname,
-                        protocol,
-                        cipher.value)
-                    logging.info("Testing cipher: {}".format(cipher.name))
-                    logging.info("Client Hello:")
-                    logging.info(hello_bytes.hex())
                     sock.connect(address)
                     sock.send(hello_bytes)
                     response = sock.recv(BUFFER)
                     response = response.hex()
+
+                except Exception as e:
+                    error = str(e)
+                    errors.append(cipher.name)
+                    logging.error(error)
+                    if (e.errno == errno.ECONNREFUSED or
+                            e.errno == errno.ENOTCONN or
+                            e.errno == errno.ECONNRESET or
+                            e.errno == errno.ECONNABORTED):
+                        shutdown_required = False
+
+                if shutdown_required:
                     sock.shutdown(socket.SHUT_RDWR)
                     sock.close()
 
-                    # Evaluate response
-                    logging.info("Response from remote server:")
-                    logging.info(response)
-                    if len(response) > 12:
-                        content_type = response[:2]
-                        version = response[2:6]
-                        hand_type = response[10:12]
-                        if (content_type == Contents.HANDSHAKE.value and
-                                version == protocol.value and
-                                hand_type == Handshakes.SERVER_HELLO.value):
+                # Evaluate response
+                logging.info("Response from remote server:")
+                logging.info(response)
+                if len(response) > 12:
+                    content_type = response[:2]
+                    version = response[2:6]
+                    hand_type = response[10:12]
+                    if (content_type == Contents.HANDSHAKE.value and
+                            version == protocol.value and
+                            hand_type == Handshakes.SERVER_HELLO.value):
 
-                            logging.info("{} supported: YES.".format(
-                                cipher.name))
-                            ciphers_supported.append(cipher.name)
-                        else:
-                            logging.info("{} supported: NO.".format(
-                                cipher.name))
-                    logging.info("#################")
-                result["ciphers_supported"] = ciphers_supported
-                print("Test finished for protocol: {}".format(protocol.name))
-                results.append(result)
-            logging.info("Results:\n{}".format(json.dumps(results, indent=4)))
-            logging.info("Scan finished.")
+                        logging.info("{} supported: YES.".format(
+                            cipher.name))
+                        ciphers_supported.append(cipher.name)
+                    else:
+                        logging.info("{} supported: NO.".format(
+                            cipher.name))
+                logging.info("#################")
+            result["ciphers_supported"] = ciphers_supported
+            result["errors"] = errors
+            print("Test finished for protocol: {}".format(protocol.name))
+            results.append(result)
+        logging.info("Results:\n{}".format(json.dumps(results, indent=4)))
+        logging.info("Scan finished.")
 
-        except socket.timeout:
-            logging.info(Errors.SocketTimeout.value)
-            sock.shutdown(socket.SHUT_RDWR)
-            sock.close()
-            return None, Errors.SocketTimeout.value
-
-        except Exception as e:
-            unknown_error = str(e)
-            logging.info(unknown_error)
-            sock.shutdown(socket.SHUT_RDWR)
-            sock.close()
-            return None, unknown_error
-
-        return [], None
+        return results, None
 
     def _build_client_hello(self, host, protocol, cipher_suite):
         """Builds a TLS Client Hello byte sequence for the given arguments.
@@ -143,6 +149,40 @@ class Scanner():
         message = ''
         if protocol.name.count("TLS") == 1:
             # Extensions are supported as of TLSv1.0 onwards
+
+            # Extension Supported Versions
+            sup_version = protocol.value
+            sup_version_len = Utilities.get_length(sup_version, 1)
+            ext_len = Utilities.get_length(sup_version_len+sup_version, 2)
+            ext_type = '002b'
+            ext_supported_versions = ext_type + \
+                ext_len + \
+                sup_version_len + \
+                sup_version
+
+            # Extension Signature Algorithms
+            algorithms = ""
+            for algorithm in SignatureAlgorithms:
+                algorithms += algorithm.value
+            alg_len = Utilities.get_length(algorithms, 2)
+            ext_len = Utilities.get_length(alg_len+algorithms, 2)
+            ext_type = '000d'
+            ext_signature_algs = ext_type + ext_len + alg_len + algorithms
+
+            # Extension Extended Master Secret
+            ext_type = '0017'
+            ext_len = '0000'
+            ext_extended_master_key = ext_type + ext_len
+
+            # Extension Encrypt then MAC
+            ext_type = '0016'
+            ext_len = '0000'
+            ext_encrypt_then_mac = ext_type + ext_len
+
+            # Extension Session Ticket
+            ext_type = '0023'
+            ext_len = '0000'
+            ext_session_ticket = ext_type + ext_len
 
             # Extension Supported Groups
             supported_groups = ""
@@ -177,7 +217,14 @@ class Scanner():
             # Extensions combined
             extensions = ext_server_name + \
                 ext_ec_point_formats + \
-                ext_supported_groups
+                ext_supported_groups + \
+                ext_supported_versions
+                # ext_signature_algs + \
+                # ext_session_ticket + \
+                # ext_encrypt_then_mac + \
+                # ext_extended_master_key + \
+
+
             extensions_length = Utilities.get_length(extensions, 2)
             message = extensions_length + extensions
 
