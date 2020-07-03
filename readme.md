@@ -1,6 +1,4 @@
 # Muspell SSL
-A pure Python TLS connection tester with no external dependencies licensed under MIT.
+A pure Python TLS connection tester with no external dependencies.
 
-# Installing Virtual Environment
-From the main directory:
-> pipenv install
+![muspelheim](muspelheim.jpg)
