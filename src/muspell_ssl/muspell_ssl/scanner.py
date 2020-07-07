@@ -1,3 +1,4 @@
+import socket
 import enum
 import os
 import logging
@@ -20,8 +21,8 @@ from .utilities import Utilities
 
 # CONSTANTS
 TIMEOUT = 3  # socket connection timeout in seconds
-BUFFER = 4096
-SIMULTANEOUS_CONNECTIONS = 3  # number of simultaneous async connections
+BUFFER = 2048
+SIMULTANEOUS_CONNECTIONS = 50  # number of simultaneous async connections
 
 # Logging Setup
 logging.basicConfig(
@@ -82,7 +83,8 @@ class Scanner():
             # In here I should have a group of simultanous tasks to call
             address = (self.hostname, self.port)
             for ciphers_group in ciphers_buffer:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
                 tasks = []
                 # Schedule tasks
                 for cipher in ciphers_group:
@@ -314,10 +316,12 @@ class Scanner():
         response = ""  # ensure response exists if there is exception
         error = None
         try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(TIMEOUT)
+            sock.connect(address)
             host = address[0]
             port = address[1]
-            reader, writer = await asyncio.open_connection(host,
-                                                           port)
+            reader, writer = await asyncio.open_connection(sock=sock)
             writer.write(message)
             await writer.drain()
             response = await reader.read(BUFFER)
