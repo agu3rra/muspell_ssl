@@ -1,9 +1,10 @@
-import socket
 import enum
 import os
 import logging
 import json
 import errno
+import asyncio
+from collections import deque  # for using stacks
 
 from .tls_definitions import (
     Contents,
@@ -20,6 +21,7 @@ from .utilities import Utilities
 # CONSTANTS
 TIMEOUT = 3  # socket connection timeout in seconds
 BUFFER = 4096
+SIMULTANEOUS_CONNECTIONS = 3  # number of simultaneous async connections
 
 # Logging Setup
 logging.basicConfig(
@@ -52,7 +54,7 @@ class Scanner():
         """
         # Trial run
         results = []
-        # Try a number of secret handshakes
+        # Try a number of handshakes
         logging.info("####################################")
         logging.info("Muspell SSL")
         logging.info("Starting scan for {}:{}".format(self.hostname,
@@ -62,63 +64,70 @@ class Scanner():
             logging.info("***\nProtocol: {}".format(protocol.name))
             result = {}
             result["protocol"] = protocol.name
-            ciphers = ProtocolCiphers[protocol.name]
+            ciphers = deque(ProtocolCiphers[protocol.name])
             result["ciphers_tested"] = len(ciphers)
             ciphers_supported = []
             errors = []
-            for cipher in ciphers:
-                address = (self.hostname, self.port)
-                hello_bytes = self._build_client_hello(
-                    self.hostname,
-                    protocol,
-                    cipher.value)
-                logging.info("Testing cipher: {}".format(cipher.name))
-                logging.info("Client Hello:")
-                logging.info(hello_bytes.hex())
 
-                shutdown_required = True
-                response = ""  # ensure response exists if there is exception
+            # Create buffer of ciphers to test
+            ciphers_buffer = []
+            while len(ciphers) > 0:
+                buffer_element = []
+                for i in range(SIMULTANEOUS_CONNECTIONS):
+                    buffer_element.append(ciphers.pop())
+                    if len(ciphers) == 0:
+                        break
+                ciphers_buffer.append(buffer_element)
+
+            # In here I should have a group of simultanous tasks to call
+            address = (self.hostname, self.port)
+            for ciphers_group in ciphers_buffer:
+                loop = asyncio.get_event_loop()
+                tasks = []
+                # Schedule tasks
+                for cipher in ciphers_group:
+                    hello_bytes = self._build_client_hello(
+                        self.hostname,
+                        protocol,
+                        cipher.value)
+
+                    tasks.append(
+                        loop.create_task(
+                            self.async_send(hello_bytes, address, cipher.name)
+                        )
+                    )
+                # Run tasks
                 try:
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(TIMEOUT)
-                    # sock.setblocking(False)
-                    sock.connect(address)
-                    sock.send(hello_bytes)
-                    response = sock.recv(BUFFER)
-                    response = response.hex()
+                    for task in tasks:
+                        loop.run_until_complete(task)
+                finally:
+                    loop.close()
+                # Process results for this group
+                for task in tasks:
+                    response, err, cipher_name = task.result()
+                    if err is None:  # Valid response obtained
+                        # Evaluate response
+                        logging.info("Cipher: {}".format(cipher_name))
+                        logging.info("Response from remote server:")
+                        logging.info(response)
+                        if len(response) > 12:
+                            content_type = response[:2]
+                            version = response[2:6]
+                            hand_type = response[10:12]
+                            if (content_type == Contents.HANDSHAKE.value and
+                                    version == protocol.value and
+                                    hand_type == Handshakes.SERVER_HELLO.value):
 
-                except Exception as e:
-                    error = str(e)
-                    errors.append(cipher.name)
-                    logging.error(error)
-                    if (e.errno == errno.ECONNREFUSED or
-                            e.errno == errno.ENOTCONN or
-                            e.errno == errno.ECONNRESET or
-                            e.errno == errno.ECONNABORTED):
-                        shutdown_required = False
-
-                if shutdown_required:
-                    # sock.shutdown(socket.SHUT_RDWR)
-                    sock.close()
-
-                # Evaluate response
-                logging.info("Response from remote server:")
-                logging.info(response)
-                if len(response) > 12:
-                    content_type = response[:2]
-                    version = response[2:6]
-                    hand_type = response[10:12]
-                    if (content_type == Contents.HANDSHAKE.value and
-                            version == protocol.value and
-                            hand_type == Handshakes.SERVER_HELLO.value):
-
-                        logging.info("{} supported: YES.".format(
-                            cipher.name))
-                        ciphers_supported.append(cipher.name)
+                                logging.info("{} supported: YES.".format(
+                                    cipher_name))
+                                ciphers_supported.append(cipher_name)
+                            else:
+                                logging.info("{} supported: NO.".format(
+                                    cipher_name))
+                        logging.info("#################")
                     else:
-                        logging.info("{} supported: NO.".format(
-                            cipher.name))
-                logging.info("#################")
+                        errors.append(cipher_name)
+
             result["ciphers_supported"] = ciphers_supported
             result["errors"] = errors
             print("Test finished for protocol: {}".format(protocol.name))
@@ -224,7 +233,6 @@ class Scanner():
                 # ext_encrypt_then_mac + \
                 # ext_extended_master_key + \
 
-
             extensions_length = Utilities.get_length(extensions, 2)
             message = extensions_length + extensions
 
@@ -289,3 +297,42 @@ class Scanner():
         # messages start with 0x80.
 
         return bytes.fromhex(message)
+
+    async def async_send(self, message, address, cipher):
+        """Sends an asynchronous message to a remote server
+
+        Args:
+            message ([bytes]): byte array representing a message
+            address (str, int): a tuple that represents the remote server
+            cipher (str): the cipher I wish to test, since when this returns I
+                          won't know. Parsing the message is an alternative.
+
+        Returns:
+            [type]: [description]
+        """
+        shutdown_required = True
+        response = ""  # ensure response exists if there is exception
+        error = None
+        try:
+            host = address[0]
+            port = address[1]
+            reader, writer = await asyncio.open_connection(host,
+                                                           port)
+            writer.write(message)
+            await writer.drain()
+            response = await reader.read(BUFFER)
+            response = response.hex()
+        except Exception as e:
+            error = str(e)
+            if (e.errno == errno.ECONNREFUSED or
+                    e.errno == errno.ENOTCONN or
+                    e.errno == errno.ECONNRESET or
+                    e.errno == errno.ECONNABORTED):
+                shutdown_required = False
+
+        if shutdown_required:
+            # sock.shutdown(socket.SHUT_RDWR)
+            writer.close()
+            await writer.wait_closed()
+
+        return response, error, cipher

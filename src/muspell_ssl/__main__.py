@@ -1,8 +1,19 @@
 import argparse
 import json
 import sys
+import time
 
 import muspell_ssl
+
+
+def time_event(message):
+    """Prints a message followed by the time.
+
+    Args:
+        message (str): a simple message
+    """
+    print(f"{message}: {time.strftime('%X')}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -14,6 +25,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     host = args.host.lower()
     port = int(args.port)
+    time_event("started")
     print("Initializing scanner...")
     scanner = muspell_ssl.Scanner(host, port)
     results, err = scanner.run()
@@ -25,4 +37,5 @@ if __name__ == "__main__":
 
     print("Scan results:")
     print(json.dumps(results, indent=4))
+    time_event("finished")
     sys.exit(0)
