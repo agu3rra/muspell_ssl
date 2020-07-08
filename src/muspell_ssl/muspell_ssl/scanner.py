@@ -1,9 +1,6 @@
 import socket
 import enum
 import os
-import logging
-import json
-import errno
 import asyncio
 from collections import deque  # for using stacks
 
@@ -20,16 +17,9 @@ from .tls_definitions import (
 from .utilities import Utilities
 
 # CONSTANTS
-TIMEOUT = 3  # socket connection timeout in seconds
+TIMEOUT = 1  # socket connection timeout in seconds
 BUFFER = 2048
-SIMULTANEOUS_CONNECTIONS = 50  # number of simultaneous async connections
-
-# Logging Setup
-logging.basicConfig(
-    filename="scanner.log",
-    level=logging.INFO,
-    format='%(asctime)-15s - %(levelname)s - %(message)s'
-)
+SIMULTANEOUS_CONNECTIONS = 25  # number of simultaneous async connections
 
 
 class Errors(enum.Enum):
@@ -47,7 +37,7 @@ class Scanner():
         if (not isinstance(hostname, str) or not isinstance(port, int)):
             raise ValueError(Errors.InvalidInit.value)
 
-    def run(self):
+    async def run(self):
         """Runs numerous TLS Handshake attempts to determine supported versions
 
         Returns:
@@ -56,19 +46,18 @@ class Scanner():
         # Trial run
         results = []
         # Try a number of handshakes
-        logging.info("####################################")
-        logging.info("Muspell SSL")
-        logging.info("Starting scan for {}:{}".format(self.hostname,
-                                                      self.port))
-        logging.info("---")
+        print("####################################")
+        print("Muspell SSL")
+        print("Starting scan for {}:{}".format(self.hostname,
+                                               self.port))
+        print("---")
+
         for protocol in Protocols:
-            logging.info("***\nProtocol: {}".format(protocol.name))
             result = {}
             result["protocol"] = protocol.name
             ciphers = deque(ProtocolCiphers[protocol.name])
             result["ciphers_tested"] = len(ciphers)
             ciphers_supported = []
-            errors = []
 
             # Create buffer of ciphers to test
             ciphers_buffer = []
@@ -83,8 +72,6 @@ class Scanner():
             # In here I should have a group of simultanous tasks to call
             address = (self.hostname, self.port)
             for ciphers_group in ciphers_buffer:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
                 tasks = []
                 # Schedule tasks
                 for cipher in ciphers_group:
@@ -92,26 +79,22 @@ class Scanner():
                         self.hostname,
                         protocol,
                         cipher.value)
-
-                    tasks.append(
-                        loop.create_task(
-                            self.async_send(hello_bytes, address, cipher.name)
+                    try:
+                        task_result = await asyncio.wait_for(
+                            self.async_send(hello_bytes, address, cipher.name),
+                            timeout=TIMEOUT
                         )
-                    )
-                # Run tasks
-                try:
-                    for task in tasks:
-                        loop.run_until_complete(task)
-                finally:
-                    loop.close()
+                        tasks.append(task_result)
+                    except Exception as e:
+                        tasks.append(e)
+
+                # group_results = await asyncio.gather(*tasks,
+                #                                      return_exceptions=True)
                 # Process results for this group
                 for task in tasks:
-                    response, err, cipher_name = task.result()
-                    if err is None:  # Valid response obtained
+                    if not isinstance(task, Exception):
+                        response, cipher_name = task
                         # Evaluate response
-                        logging.info("Cipher: {}".format(cipher_name))
-                        logging.info("Response from remote server:")
-                        logging.info(response)
                         if len(response) > 12:
                             content_type = response[:2]
                             version = response[2:6]
@@ -119,25 +102,14 @@ class Scanner():
                             if (content_type == Contents.HANDSHAKE.value and
                                     version == protocol.value and
                                     hand_type == Handshakes.SERVER_HELLO.value):
-
-                                logging.info("{} supported: YES.".format(
-                                    cipher_name))
                                 ciphers_supported.append(cipher_name)
-                            else:
-                                logging.info("{} supported: NO.".format(
-                                    cipher_name))
-                        logging.info("#################")
-                    else:
-                        errors.append(cipher_name)
 
             result["ciphers_supported"] = ciphers_supported
-            result["errors"] = errors
             print("Test finished for protocol: {}".format(protocol.name))
             results.append(result)
-        logging.info("Results:\n{}".format(json.dumps(results, indent=4)))
-        logging.info("Scan finished.")
+        print("Scan finished.")
 
-        return results, None
+        return results
 
     def _build_client_hello(self, host, protocol, cipher_suite):
         """Builds a TLS Client Hello byte sequence for the given arguments.
@@ -312,31 +284,25 @@ class Scanner():
         Returns:
             [type]: [description]
         """
-        shutdown_required = True
         response = ""  # ensure response exists if there is exception
-        error = None
+        writer = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(TIMEOUT)
             sock.connect(address)
-            host = address[0]
-            port = address[1]
+            # host = address[0]
+            # port = address[1]
             reader, writer = await asyncio.open_connection(sock=sock)
             writer.write(message)
             await writer.drain()
             response = await reader.read(BUFFER)
             response = response.hex()
         except Exception as e:
-            error = str(e)
-            if (e.errno == errno.ECONNREFUSED or
-                    e.errno == errno.ENOTCONN or
-                    e.errno == errno.ECONNRESET or
-                    e.errno == errno.ECONNABORTED):
-                shutdown_required = False
+            raise e
 
-        if shutdown_required:
-            # sock.shutdown(socket.SHUT_RDWR)
-            writer.close()
-            await writer.wait_closed()
+        finally:
+            if writer is not None:
+                writer.close()
+                await writer.wait_closed()
 
-        return response, error, cipher
+        return response, cipher

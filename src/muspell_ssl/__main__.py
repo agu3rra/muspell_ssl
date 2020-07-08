@@ -1,21 +1,13 @@
 import argparse
 import json
 import sys
-import time
+from datetime import datetime
+import asyncio
 
 import muspell_ssl
 
 
-def time_event(message):
-    """Prints a message followed by the time.
-
-    Args:
-        message (str): a simple message
-    """
-    print(f"{message}: {time.strftime('%X')}")
-
-
-if __name__ == "__main__":
+async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("host",
                         help="Target host that you'll scan. E.g.:example.com.")
@@ -25,17 +17,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
     host = args.host.lower()
     port = int(args.port)
-    time_event("started")
+    start = datetime.now()
     print("Initializing scanner...")
     scanner = muspell_ssl.Scanner(host, port)
-    results, err = scanner.run()
-
-    if err is not None:
-        print("There was an error while processing your scan:")
-        print(err)
-        sys.exit(1)
-
-    print("Scan results:")
+    results = await scanner.run()
+    end = datetime.now()
     print(json.dumps(results, indent=4))
-    time_event("finished")
+    print("Execution time: {}".format(end - start))
     sys.exit(0)
+
+if __name__ == "__main__":
+    asyncio.run(main())
