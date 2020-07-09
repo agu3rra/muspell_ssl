@@ -20,7 +20,7 @@ from .utilities import Utilities
 # CONSTANTS
 TIMEOUT = 1  # socket connection timeout in seconds
 BUFFER = 2048
-SIMULTANEOUS_CONNECTIONS = 10  # number of simultaneous async connections
+SIMULTANEOUS_CONNECTIONS = 55  # number of simultaneous async connections
 
 
 class Errors(enum.Enum):
@@ -82,35 +82,36 @@ class Scanner():
             for ciphers_group in ciphers_buffer:
                 tasks = []
                 # Schedule tasks
+                gather_tasks = []
                 for cipher in ciphers_group:
                     hello_bytes = self._build_client_hello(
                         self.hostname,
                         protocol,
                         cipher)
-                    try:
-                        task_result = await asyncio.wait_for(
-                            self.async_send(hello_bytes, address, cipher),
-                            timeout=TIMEOUT
-                        )
-                        tasks.append(task_result)
-                    except Exception as e:
-                        tasks.append(e)
+                    gather_tasks.append(
+                        self.async_send(hello_bytes, address, cipher))
+                try:
+                    task_result = await asyncio.gather(*gather_tasks)
+                    tasks.append(task_result)
+                except Exception as e:
+                    tasks.append(e)
 
                 # group_results = await asyncio.gather(*tasks,
                 #                                      return_exceptions=True)
                 # Process results for this group
-                for task in tasks:
-                    if not isinstance(task, Exception):
-                        response, cipher_name = task
-                        # Evaluate response
-                        if len(response) > 12:
-                            content_type = response[:2]
-                            version = response[2:6]
-                            hand_type = response[10:12]
-                            if (content_type == Contents.HANDSHAKE.value and
-                                    version == protocol.value and
-                                    hand_type == Handshakes.SERVER_HELLO.value):
-                                ciphers_supported.append(cipher_name)
+                for task_array in tasks:
+                    if not isinstance(task_array, Exception):
+                        for task in task_array:
+                            response, cipher_name = task
+                            # Evaluate response
+                            if len(response) > 12:
+                                content_type = response[:2]
+                                version = response[2:6]
+                                hand_type = response[10:12]
+                                if (content_type == Contents.HANDSHAKE.value and
+                                        version == protocol.value and
+                                        hand_type == Handshakes.SERVER_HELLO.value):
+                                    ciphers_supported.append(cipher_name)
 
             # recover cipher names out of supported ciphers
             supported_ciphers = []
@@ -141,7 +142,6 @@ class Scanner():
             byte string: a hex representation of the hello message which can
                          be sent over a network to a remote host.
         """
-
         if protocol.value == Protocols.SSLv20.value:
             return self._client_hello_sslv20(cipher_suite)
 
@@ -286,7 +286,6 @@ class Scanner():
         total_length = Utilities.get_length(message, 1)
         message = '80' + total_length + message  # Observed all SSLv20
         # messages start with 0x80.
-
         return bytes.fromhex(message)
 
     async def async_send(self, message, address, cipher):
@@ -304,12 +303,9 @@ class Scanner():
         response = ""  # ensure response exists if there is exception
         writer = None
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(TIMEOUT)
-            sock.connect(address)
-            # host = address[0]
-            # port = address[1]
-            reader, writer = await asyncio.open_connection(sock=sock)
+            host = address[0]
+            port = address[1]
+            reader, writer = await asyncio.open_connection(host, port)
             writer.write(message)
             await writer.drain()
             response = await reader.read(BUFFER)
@@ -321,5 +317,4 @@ class Scanner():
             if writer is not None:
                 writer.close()
                 await writer.wait_closed()
-
         return response, cipher
