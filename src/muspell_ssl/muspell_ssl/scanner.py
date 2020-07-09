@@ -3,6 +3,7 @@ import enum
 import os
 import asyncio
 from collections import deque  # for using stacks
+from time import time
 
 from .tls_definitions import (
     Contents,
@@ -19,7 +20,7 @@ from .utilities import Utilities
 # CONSTANTS
 TIMEOUT = 1  # socket connection timeout in seconds
 BUFFER = 2048
-SIMULTANEOUS_CONNECTIONS = 25  # number of simultaneous async connections
+SIMULTANEOUS_CONNECTIONS = 10  # number of simultaneous async connections
 
 
 class Errors(enum.Enum):
@@ -59,15 +60,22 @@ class Scanner():
             result["ciphers_tested"] = len(ciphers)
             ciphers_supported = []
 
-            # Create buffer of ciphers to test
-            ciphers_buffer = []
-            while len(ciphers) > 0:
-                buffer_element = []
-                for i in range(SIMULTANEOUS_CONNECTIONS):
-                    buffer_element.append(ciphers.pop())
-                    if len(ciphers) == 0:
-                        break
-                ciphers_buffer.append(buffer_element)
+            # Protocols prior to 1.2 should fail if they support any cipher
+            if protocol.name == Protocols.TLSv12.name:
+                # Create buffer of ciphers to test
+                ciphers_buffer = []
+                while len(ciphers) > 0:
+                    buffer_element = []
+                    for i in range(SIMULTANEOUS_CONNECTIONS):
+                        buffer_element.append(ciphers.pop().value)
+                        if len(ciphers) == 0:
+                            break
+                    ciphers_buffer.append(buffer_element)
+            else:
+                full_suite = ''
+                while len(ciphers) > 0:
+                    full_suite += ciphers.pop().value
+                ciphers_buffer = [[full_suite]]
 
             # In here I should have a group of simultanous tasks to call
             address = (self.hostname, self.port)
@@ -78,10 +86,10 @@ class Scanner():
                     hello_bytes = self._build_client_hello(
                         self.hostname,
                         protocol,
-                        cipher.value)
+                        cipher)
                     try:
                         task_result = await asyncio.wait_for(
-                            self.async_send(hello_bytes, address, cipher.name),
+                            self.async_send(hello_bytes, address, cipher),
                             timeout=TIMEOUT
                         )
                         tasks.append(task_result)
@@ -104,11 +112,20 @@ class Scanner():
                                     hand_type == Handshakes.SERVER_HELLO.value):
                                 ciphers_supported.append(cipher_name)
 
-            result["ciphers_supported"] = ciphers_supported
+            # recover cipher names out of supported ciphers
+            supported_ciphers = []
+            for cipher in ciphers_supported:
+                if len(cipher) > 6:
+                    supported_ciphers.append('one_of_the_full_suite')
+                else:
+                    proto_ciphers = ProtocolCiphers[protocol.name]
+                    cipher_name = proto_ciphers(cipher).name
+                    supported_ciphers.append(cipher_name)
+
+            result["ciphers_supported"] = supported_ciphers
             print("Test finished for protocol: {}".format(protocol.name))
             results.append(result)
         print("Scan finished.")
-
         return results
 
     def _build_client_hello(self, host, protocol, cipher_suite):
