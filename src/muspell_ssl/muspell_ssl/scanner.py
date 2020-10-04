@@ -4,6 +4,7 @@ import os
 import asyncio
 from collections import deque  # for using stacks
 from time import time
+from async_timeout import timeout
 
 from .tls_definitions import (
     Contents,
@@ -18,7 +19,7 @@ from .tls_definitions import (
 from .utilities import Utilities
 
 # CONSTANTS
-TIMEOUT = 1  # socket connection timeout in seconds
+TIMEOUT = 2  # socket connection timeout in seconds
 BUFFER = 2048
 SIMULTANEOUS_CONNECTIONS = 55  # number of simultaneous async connections
 
@@ -305,11 +306,12 @@ class Scanner():
         try:
             host = address[0]
             port = address[1]
-            reader, writer = await asyncio.open_connection(host, port)
-            writer.write(message)
-            await writer.drain()
-            response = await reader.read(BUFFER)
-            response = response.hex()
+            async with timeout(TIMEOUT) as cm:
+                reader, writer = await asyncio.open_connection(host, port)
+                writer.write(message)
+                await writer.drain()
+                response = await reader.read(BUFFER)
+                response = response.hex()
         except Exception as e:
             raise e
 

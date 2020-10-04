@@ -7,8 +7,11 @@ verify_ssl = true
 flake8 = "*"
 pytest = "*"
 pylint = "*"
+pre-commit = "*"
+v = {editable = true,version = "*"}
 
 [packages]
+async-timeout = "*"
 
 [requires]
 python_version = "3.8"
