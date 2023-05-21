@@ -1,8 +1,15 @@
+# Stdlib
 import sys
 from datetime import datetime
 import enum
-import click
+import json
 import pkg_resources
+
+# Dependencies
+import asyncio
+import click
+
+# Internally defined
 from .tlscheck import Scanner
 from .terminal import (
     info,
@@ -34,6 +41,9 @@ def bye(start: datetime, exit_code: int) -> None:
 def cli():
     pass
 
+async def run_scan(scan):
+    await scan.run()
+
 
 @cli.command()
 @click.option('-h', '--host',
@@ -52,11 +62,15 @@ def tlscheck(host, port):
                     "Please type 'mimir tlscheck --help' for additional info"))
         bye(start, ExitCode.InvalidInput.value)
     click.echo(f"Testing TLS settings for '{host}' on port '{port}'")
+    scan = Scanner(host, int(port))
+    results = asyncio.run(run_scan(scan))
+    print(json.dumps(results, indent=4))
 
 
 @cli.command()
 def version():
-    click.echo(pkg_resources.get_distribution("mimirpy").version)
+    version = pkg_resources.get_distribution("mimirpy").version
+    click.echo(f"version {version}")
 
 
 def main():
