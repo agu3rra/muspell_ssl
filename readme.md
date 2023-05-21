@@ -8,6 +8,8 @@ PS: This was an older project of mine that I wished to package as a CLI using [c
 pip install mimirpy
 ```
 
+PS: if you use python poetry, make sure you install on a `poetry virtualenv` and activate `poetry shell`.
+
 ## Usage
 ```
 $ mimir tlscheck --host foobar.com --port 1234
